@@ -32,8 +32,13 @@ public class MeasurementOverlay : Form
     private readonly OverlayMode _mode;
     private readonly AppSettings _settings;
     private Bitmap? _backgroundImage;
+    private Point _cursor;
+    private string? _status;
 
     private const int WS_EX_TOOLWINDOW = 0x80;
+    private const double SnapStepDegrees = 15.0;
+    private const int MagnifierZoom = 8;
+    private const int MagnifierRadius = 10; // source pixels each side of the cursor
 
     public MeasurementOverlay(AppSettings settings, OverlayMode mode = OverlayMode.Measure)
     {
@@ -45,6 +50,7 @@ public class MeasurementOverlay : Form
 
         var bounds = GetVirtualScreenBounds();
         _backgroundImage = CaptureScreen(bounds);
+        _cursor = new Point(Cursor.Position.X - bounds.X, Cursor.Position.Y - bounds.Y);
 
         this.FormBorderStyle = FormBorderStyle.None;
         this.StartPosition = FormStartPosition.Manual;
@@ -96,6 +102,7 @@ public class MeasurementOverlay : Form
         if (e.Button == MouseButtons.Left)
         {
             _isDragging = true;
+            _status = null;
 
             if (_mode == OverlayMode.MeasureAndScreenshot && _measurementComplete)
             {
@@ -123,6 +130,7 @@ public class MeasurementOverlay : Form
 
     private void OnMouseMove(object? sender, MouseEventArgs e)
     {
+        _cursor = e.Location;
         if (_isDragging)
         {
             if (_mode == OverlayMode.MeasureAndScreenshot && _measurementComplete)
@@ -135,10 +143,34 @@ public class MeasurementOverlay : Form
             }
             else
             {
-                _measureEnd = e.Location;
+                // Hold Shift to snap the line to 15 degree steps (0, 15, 30, 45 ... 90).
+                _measureEnd = (ModifierKeys & Keys.Shift) != 0 && _measureStart != null
+                    ? MeasureMath.SnapAngle(_measureStart.Value, e.Location, SnapStepDegrees)
+                    : e.Location;
             }
-            Invalidate();
         }
+        Invalidate(); // the magnifier follows the cursor
+    }
+
+    private bool CanNudgeMeasurement =>
+        _measureStart != null && !_isDragging && _mode != OverlayMode.RegionScreenshot && _regionStart == null;
+
+    // Arrow keys move the end point 1 px (Shift: 10 px) for exact placement.
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        var key = keyData & Keys.KeyCode;
+        if (CanNudgeMeasurement && key is Keys.Left or Keys.Right or Keys.Up or Keys.Down)
+        {
+            int step = (keyData & Keys.Shift) != 0 ? 10 : 1;
+            int dx = key == Keys.Left ? -step : key == Keys.Right ? step : 0;
+            int dy = key == Keys.Up ? -step : key == Keys.Down ? step : 0;
+            _measureEnd = new Point(_measureEnd.X + dx, _measureEnd.Y + dy);
+            _cursor = _measureEnd;
+            _status = null;
+            Invalidate();
+            return true;
+        }
+        return base.ProcessCmdKey(ref msg, keyData);
     }
 
     private void OnMouseUp(object? sender, MouseEventArgs e)
@@ -213,6 +245,12 @@ public class MeasurementOverlay : Form
                 {
                     SaveRegionScreenshot(clipboardOnly: true);
                 }
+            }
+            else if (_measureStart != null)
+            {
+                Clipboard.SetText(MeasureMath.Summary(_measureStart.Value, _measureEnd, this.Location));
+                _status = "Values copied to clipboard";
+                Invalidate();
             }
         }
     }
@@ -375,23 +413,41 @@ public class MeasurementOverlay : Form
         int midX = (start.X + end.X) / 2;
         int midY = (start.Y + end.Y) / 2;
 
-        string distanceText = $"{distance:F1} px";
-        var distanceSize = g.MeasureString(distanceText, _distanceFont);
+        double fromH = MeasureMath.FromHorizontal(start, end);
+        double fromV = MeasureMath.FromVertical(start, end);
+        var angleColor = Color.FromArgb(_elementAlpha, 255, 170, 60);
 
-        var distanceBgRect = new RectangleF(
-            midX - distanceSize.Width / 2 - 5,
-            midY - distanceSize.Height / 2 - 5,
-            distanceSize.Width + 10,
-            distanceSize.Height + 10
-        );
+        // Angle arc at the start point, from the horizontal guide to the line.
+        if (distance > 24)
+        {
+            float radius = (float)Math.Min(55, distance / 2);
+            float refAngle = end.X >= start.X ? 0f : 180f;
+            float lineAngle = (float)(Math.Atan2(dy, dx) * 180.0 / Math.PI);
+            float sweep = lineAngle - refAngle;
+            while (sweep > 180f) sweep -= 360f;
+            while (sweep < -180f) sweep += 360f;
+            using var arcPen = new Pen(angleColor, 2f);
+            g.DrawArc(arcPen, start.X - radius, start.Y - radius, radius * 2, radius * 2, refAngle, sweep);
+        }
+
+        string distanceText = $"{distance:F1} px";
+        string angleText = $"{fromH:F1}° from horizontal · {fromV:F1}° from vertical";
+        var distanceSize = g.MeasureString(distanceText, _distanceFont);
+        var angleSize = g.MeasureString(angleText, _coordFont);
+        float boxW = Math.Max(distanceSize.Width, angleSize.Width);
+        float boxH = distanceSize.Height + angleSize.Height;
+
+        var distanceBgRect = new RectangleF(midX - boxW / 2 - 5, midY - boxH / 2 - 5, boxW + 10, boxH + 10);
 
         using var elementBgBrush = new SolidBrush(bgColor);
         using var elementTextBrush = new SolidBrush(textColor);
+        using var angleBrush = new SolidBrush(angleColor);
         using var borderPen = new Pen(lineColor, 1f);
 
         g.FillRectangle(elementBgBrush, distanceBgRect);
         g.DrawRectangle(borderPen, distanceBgRect.X, distanceBgRect.Y, distanceBgRect.Width, distanceBgRect.Height);
-        g.DrawString(distanceText, _distanceFont, elementTextBrush, midX - distanceSize.Width / 2, midY - distanceSize.Height / 2);
+        g.DrawString(distanceText, _distanceFont, elementTextBrush, midX - distanceSize.Width / 2, midY - boxH / 2);
+        g.DrawString(angleText, _coordFont, angleBrush, midX - angleSize.Width / 2, midY - boxH / 2 + distanceSize.Height);
 
         string hText = $"W: {Math.Abs(dx):F0} px";
         var hSize = g.MeasureString(hText, _coordFont);
@@ -426,9 +482,62 @@ public class MeasurementOverlay : Form
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
+        PaintScene(e.Graphics);
+        DrawMagnifier(e.Graphics);
+    }
 
-        var g = e.Graphics;
+    // Zoomed view of the pixels under the cursor so points can be placed exactly.
+    private void DrawMagnifier(Graphics g)
+    {
+        if (_backgroundImage == null) return;
 
+        int srcSize = MagnifierRadius * 2 + 1;
+        int boxSize = srcSize * MagnifierZoom;
+        var src = new Rectangle(_cursor.X - MagnifierRadius, _cursor.Y - MagnifierRadius, srcSize, srcSize);
+
+        // Sit beyond the end of the line (default below-right) so it never covers the labels;
+        // flip to the other side near screen edges.
+        bool right = true, down = true;
+        if (_measureStart != null && _measureEnd != _measureStart.Value && _regionStart == null)
+        {
+            right = _measureEnd.X >= _measureStart.Value.X;
+            down = _measureEnd.Y >= _measureStart.Value.Y;
+        }
+        const int gap = 40;
+        int x = right ? _cursor.X + gap : _cursor.X - gap - boxSize;
+        int y = down ? _cursor.Y + gap : _cursor.Y - gap - boxSize - 22;
+        if (x + boxSize > ClientSize.Width) x = _cursor.X - gap - boxSize;
+        if (x < 0) x = _cursor.X + gap;
+        if (y + boxSize + 22 > ClientSize.Height) y = _cursor.Y - gap - boxSize - 22;
+        if (y < 0) y = _cursor.Y + gap;
+        var box = new Rectangle(x, y, boxSize, boxSize);
+
+        var state = g.Save();
+        g.InterpolationMode = InterpolationMode.NearestNeighbor;
+        g.PixelOffsetMode = PixelOffsetMode.Half;
+        g.SmoothingMode = SmoothingMode.None;
+        g.FillRectangle(Brushes.Black, box);
+        g.DrawImage(_backgroundImage, box, src, GraphicsUnit.Pixel);
+
+        using var crossPen = new Pen(Color.FromArgb(160, Color.Red), 1f);
+        int c = MagnifierRadius * MagnifierZoom;
+        g.DrawLine(crossPen, box.X + c + MagnifierZoom / 2, box.Y, box.X + c + MagnifierZoom / 2, box.Bottom);
+        g.DrawLine(crossPen, box.X, box.Y + c + MagnifierZoom / 2, box.Right, box.Y + c + MagnifierZoom / 2);
+        g.DrawRectangle(Pens.White, box.X + c, box.Y + c, MagnifierZoom, MagnifierZoom);
+        g.DrawRectangle(Pens.White, box);
+
+        var px = _backgroundImage.GetPixel(
+            Math.Clamp(_cursor.X, 0, _backgroundImage.Width - 1),
+            Math.Clamp(_cursor.Y, 0, _backgroundImage.Height - 1));
+        string info = $"({_cursor.X + Left}, {_cursor.Y + Top})  #{px.R:X2}{px.G:X2}{px.B:X2}";
+        using var infoBg = new SolidBrush(Color.FromArgb(220, 0, 0, 0));
+        g.FillRectangle(infoBg, box.X, box.Bottom, boxSize, 20);
+        g.DrawString(info, _coordFont, Brushes.White, box.X + 4, box.Bottom + 3);
+        g.Restore(state);
+    }
+
+    private void PaintScene(Graphics g)
+    {
         if (_backgroundImage != null)
         {
             g.DrawImage(_backgroundImage, 0, 0);
@@ -561,7 +670,7 @@ public class MeasurementOverlay : Form
         // Normal measurement mode
         if (_measureStart == null)
         {
-            string startInstruction = "Click and drag to measure | Right-click or ESC to cancel";
+            string startInstruction = "Click and drag to measure (hold Shift to snap the angle) | Right-click or ESC to cancel";
             var startSize = g.MeasureString(startInstruction, _coordFont);
             g.FillRectangle(bgBrush, 10, 10, startSize.Width + 10, startSize.Height + 6);
             g.DrawString(startInstruction, _coordFont, textBrush, 15, 13);
@@ -570,9 +679,9 @@ public class MeasurementOverlay : Form
 
         DrawMeasurement(g);
 
-        string measureInstruction = _isDragging
-            ? "Release to finish | Right-click or ESC to cancel"
-            : "Right-click or ESC to close";
+        string measureInstruction = _status ?? (_isDragging
+            ? "Release to finish | Hold Shift to snap to 15° | Right-click or ESC to cancel"
+            : "Arrows nudge end (Shift: 10 px) | Ctrl+C copy values | Ctrl+S save screenshot | Right-click or ESC to close");
         var instrSize2 = g.MeasureString(measureInstruction, _coordFont);
         using var elementBgBrush = new SolidBrush(Color.FromArgb(Math.Min(_elementAlpha, 220), 0, 0, 0));
         using var elementTextBrush = new SolidBrush(Color.FromArgb(_elementAlpha, Color.White));

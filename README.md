@@ -8,6 +8,11 @@ A lightweight Windows system tray application for measuring pixel distances on s
 
 - **Click and drag** anywhere on screen to measure distances
 - **Displays**: Total distance, width, height, and screen coordinates
+- **Angles**: The angle of the line from horizontal and from vertical, with an arc drawn at the start point
+- **Snap**: Hold **Shift** while dragging to snap the line to 15° steps (0°, 15°, 30°, 45° ... 90°)
+- **Magnifier**: An 8x zoom follows the cursor, with its exact coordinates and pixel colour, so you can place points on the exact pixel
+- **Nudge**: Arrow keys move the end point 1 px (Shift + arrow: 10 px) after you release
+- **Copy values**: **Ctrl+C** copies distance, width, height, angles and coordinates as text
 - **Measure + Screenshot**: Measure, then select a region to capture with the measurement overlay
 - **Region Screenshot**: Quickly capture any area of your screen
 - **Settings**: Configurable save location, opacity, clipboard options
@@ -48,8 +53,10 @@ Both versions are identical in functionality.
 
 ### Keyboard Shortcuts (in overlay)
 
+- **Shift** (while dragging) - Snap the angle to 15° steps
+- **Arrow keys** - Nudge the end point 1 px (hold Shift for 10 px)
 - **Ctrl+S** - Save screenshot
-- **Ctrl+C** - Copy region to clipboard
+- **Ctrl+C** - Copy the measured values as text (or the region, in screenshot modes)
 - **ESC** - Cancel/close overlay
 - **Right-click** - Cancel/close overlay
 

@@ -2,7 +2,7 @@
 ; Download Inno Setup from: https://jrsoftware.org/isinfo.php
 
 #define MyAppName "Measuring Stick"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.1.0"
 #define MyAppPublisher "CurioCrafter"
 #define MyAppURL "https://github.com/CurioCrafter/MeasuringStick"
 #define MyAppExeName "MeasuringStick.exe"
