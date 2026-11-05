@@ -6,3 +6,5 @@ installer/
 *.user
 *.suo
 .vs/
+
+.claude/settings.local.json
